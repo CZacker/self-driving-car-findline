@@ -1,56 +1,259 @@
 # **Finding Lane Lines on the Road** 
 [![Udacity - Self-Driving Car NanoDegree](https://s3.amazonaws.com/udacity-sdc/github/shield-carnd.svg)](http://www.udacity.com/drive)
 
-<img src="examples/laneLines_thirdPass.jpg" width="480" alt="Combined Image" />
+[![jpg](examples/laneLines_thirdPass.jpg)](https://github.com/CZacker/self-driving-car-findline/blob/master/test_videos_output/solidWhiteRight.mp4)
 
-Overview
+***
+In this project,there are some techniques below:  
+1. Color Region  
+2. Canny Edges(Gaussian smoothing、Edge Detection)
+3. Hough Transform  
+
+with this techniques,then to process video clips to find lane lines in them
+
+***
+
+## Some Test Images
+
+![png](examples/test_image.png)
+
+lane lines are not always the same color, like these test images are in white or yellow. Further, the white lane lines are short or even just some series of dots. So that these lines need to be as one line.
+
 ---
 
-When we drive, we use our eyes to decide where to go.  The lines on the road that show us where the lanes are act as our constant reference for where to steer the vehicle.  Naturally, one of the first things we would like to do in developing a self-driving car is to automatically detect lane lines using an algorithm.
+## Color Region
 
-In this project you will detect lane lines in images using Python and OpenCV.  OpenCV means "Open-Source Computer Vision", which is a package that has many useful tools for analyzing images.  
+first, selecting only yellow and write in the images using the RGB channels
 
-To complete the project, two files will be submitted: a file containing project code and a file containing a brief write up explaining your solution. We have included template files to be used both for the [code](https://github.com/udacity/CarND-LaneLines-P1/blob/master/P1.ipynb) and the [writeup](https://github.com/udacity/CarND-LaneLines-P1/blob/master/writeup_template.md).The code file is called P1.ipynb and the writeup template is writeup_template.md 
+use MATLAB image toolbox color-thresholder,find out color RGB channel region
 
-To meet specifications in the project, take a look at the requirements in the [project rubric](https://review.udacity.com/#!/rubrics/322/view)
+![png](examples/color-thresholder.png)
 
+```python
+def select_rgb_white_yellow(image): 
+    converted = convert_hls(image)
+    # white color mask
+    lower = np.uint8([  0, 200,   0])
+    upper = np.uint8([255, 255, 255])
+    white_mask = cv2.inRange(converted, lower, upper)
+    # yellow color mask
+    lower = np.uint8([ 10,   0, 100])
+    upper = np.uint8([ 40, 255, 255])
+    yellow_mask = cv2.inRange(converted, lower, upper)
+    # combine the mask
+    mask = cv2.bitwise_or(white_mask, yellow_mask)
+    return cv2.bitwise_and(image, image, mask = mask)
+```
+![png](examples/color-selector.png)
 
-Creating a Great Writeup
----
-For this project, a great writeup should provide a detailed response to the "Reflection" section of the [project rubric](https://review.udacity.com/#!/rubrics/322/view). There are three parts to the reflection:
-
-1. Describe the pipeline
-
-2. Identify any shortcomings
-
-3. Suggest possible improvements
-
-We encourage using images in your writeup to demonstrate how your pipeline works.  
-
-All that said, please be concise!  We're not looking for you to write a book here: just a brief description.
-
-You're not required to use markdown for your writeup.  If you use another method please just submit a pdf of your writeup. Here is a link to a [writeup template file](https://github.com/udacity/CarND-LaneLines-P1/blob/master/writeup_template.md). 
-
-
-The Project
 ---
 
-## If you have already installed the [CarND Term1 Starter Kit](https://github.com/udacity/CarND-Term1-Starter-Kit/blob/master/README.md) you should be good to go!   If not, you should install the starter kit to get started on this project. ##
+It looks pretty good except some other color mix in, so we exclude outside the region of interest by apply a mask.
 
-**Step 1:** Set up the [CarND Term1 Starter Kit](https://classroom.udacity.com/nanodegrees/nd013/parts/fbf77062-5703-404e-b60c-95b78b2f3f9e/modules/83ec35ee-1e02-48a5-bdb7-d244bd47c2dc/lessons/8c82408b-a217-4d09-b81d-1bda4c6380ef/concepts/4f1870e0-3849-43e4-b670-12e6f2d4b7a7) if you haven't already.
+```python
+def region_of_interest(img, vertices):
+    #defining a blank mask to start with
+    mask = np.zeros_like(img)   
+    #defining a 3 channel or 1 channel color to fill the mask with depending on the input image
+    if len(img.shape) > 2:
+        channel_count = img.shape[2]  # i.e. 3 or 4 depending on your image
+        ignore_mask_color = (255,) * channel_count
+    else:
+        ignore_mask_color = 255       
+    #filling pixels inside the polygon defined by "vertices" with the fill color    
+    cv2.fillPoly(mask, vertices, ignore_mask_color)   
+    #returning the image only where mask pixels are nonzero
+    masked_image = cv2.bitwise_and(img, mask)
+    return masked_image
+rows, cols = img.shape[:2]
+bottom_left  = [cols*0.1, rows*0.95]
+top_left     = [cols*0.4, rows*0.6]
+bottom_right = [cols*0.9, rows*0.95]
+top_right    = [cols*0.6, rows*0.6] 
+vertices = np.array([[bottom_left, top_left, top_right, bottom_right]], dtype=np.int32)
+cut_img=region_of_interest(img_gray,vertices)
 
-**Step 2:** Open the code in a Jupyter Notebook
+```
+![png](examples/color-region.png)
 
-You will complete the project code in a Jupyter notebook.  If you are unfamiliar with Jupyter Notebooks, check out [Udacity's free course on Anaconda and Jupyter Notebooks](https://classroom.udacity.com/courses/ud1111) to get started.
+---
+using computer vision，let‘s go ahead and convert to grayscale
 
-Jupyter is an Ipython notebook where you can run blocks of code and see results interactively.  All the code for this project is contained in a Jupyter notebook. To start Jupyter in your browser, use terminal to navigate to your project directory and then run the following command at the terminal prompt (be sure you've activated your Python 3 carnd-term1 environment as described in the [CarND Term1 Starter Kit](https://github.com/udacity/CarND-Term1-Starter-Kit/blob/master/README.md) installation instructions!):
+```python
+def grayscale(img):
+    """Applies the Grayscale transform
+    This will return an image with only one color channel
+    but NOTE: to see the returned image as grayscale
+    (assuming your grayscaled image is called 'gray')
+    you should call plt.imshow(gray, cmap='gray')"""
+    return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    # Or use BGR2GRAY if you read an image with cv2.imread()
+    # return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+```
 
-`> jupyter notebook`
+![png](examples/img_gray.png)
 
-A browser window will appear showing the contents of the current directory.  Click on the file called "P1.ipynb".  Another browser window will appear displaying the notebook.  Follow the instructions in the notebook to complete the project.  
+---
 
-**Step 3:** Complete the project and submit both the Ipython notebook and the project writeup
+## Canny Edges
 
-## How to write a README
-A well written README file can enhance your project and portfolio.  Develop your abilities to create professional README files by completing [this free course](https://www.udacity.com/course/writing-readmes--ud777).
+use Canny and fiddle with the parameters for the Gaussian smoothing and Edge Detection to optimize for detecting the lane lines well
+
+### Gaussian smoothing
+
+```python
+def gaussian_blur(img, kernel_size):
+    """Applies a Gaussian Noise kernel"""
+    return cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
+```
+***The GaussianBlur takes a kernel_size parameter which we will need to play with to find one that works best. tried 3, 5, 9, ..., 17 (they must be positive and odd) and check the edge detection (see the next section) result. The bigger the kernel_size value is, the more blurry the image becomes.
+
+The bigger kearnel_size value requires more time to process. It is not noticeable with the test images but we should keep that in mind (later we'll be processing video clips). So, we should prefer smaller values if the effect is similar.***
+
+### Edge Detection
+
+```python
+def canny(img, low_threshold, high_threshold):
+    """Applies the Canny transform"""
+    return cv2.Canny(img, low_threshold, high_threshold)
+img_canny=canny(img,50,150) 
+```
+[cv2.Canny](https://docs.opencv.org/3.1.0/da/d22/tutorial_py_canny.html)  
+The function finds edges in the input image image and marks them in the output map edges using the Canny algorithm. The smallest value between threshold1 and threshold2 is used for edge linking. The largest value is used to find initial segments of strong edges. See http://en.wikipedia.org/wiki/Canny_edge_detector
+
+![png](examples/edges.png)
+
+---
+
+## Hough Transform
+
+[cv2.HoughLinesP()](https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_imgproc/py_houghlines/py_houghlines.html)  
+OpenCV implementation is based on Robust Detection of Lines Using the Progressive Probabilistic Hough Transform by Matas, J. and Galambos, C. and Kittler, J.V.. The function used is cv2.HoughLinesP(). It has two new arguments.
+1. minLineLength - Minimum length of line. Line segments shorter than this are rejected.
+2. maxLineGap - Maximum allowed gap between line segments to treat them as single line.
+
+Best thing is that, it directly returns the two endpoints of lines. In previous case, you got only the parameters of lines, and you had to find all the points.
+
+```python
+def hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
+    lines = cv2.HoughLinesP(img, rho, theta, threshold, np.array([]), minLineLength=min_line_len, maxLineGap=max_line_gap)
+    line_img = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
+    draw_lines(line_img, lines)
+    # line_img = draw_lane_lines(line_img,lane_lines(line_img, lines))
+    return line_img
+```
+![png](examples/hough-line.png)
+---
+## Extrapolating Lines
+There are multiple lines detected for a lane line. We should come up with an averaged line for that.  
+
+Also, some lane lines are only partially recognized. We should extrapolate the line to cover full lane line length.  
+
+We want two lane lines: one for the left and the other for the right. The left lane should have a positive slope, and the right lane should have a negative slope. Therefore, we'll collect positive slope lines and negative slope lines separately and take averages.  
+
+```python
+def average(lines):
+    '''
+    separating line segments by their 
+    slope ((y2-y1)/(x2-x1)) to decide which segments are part of the left
+    line vs. the right line.
+    '''
+    left_lines = [] # [slope, intercept]
+    left_length = [] # [length]
+    right_lines = [] # [slope, intercept]
+    right_length = [] # [length]   
+    # Empty array for slope,intercept and length    
+    for line in lines:
+        for x1, y1, x2, y2 in line:
+            if x2==x1:
+                continue # ignore a vertical line => slope=0
+            slope = (y2-y1)/(x2-x1)
+            intercept = y1 - slope*x1
+            length = np.sqrt((y2-y1)**2+(x2-x1)**2)           
+            if slope < 0: # y is reversed in image
+                left_lines.append((slope, intercept))
+                left_length.append((length))
+            else:
+                right_lines.append((slope, intercept))
+                right_length.append((length))    
+    # add more weight to longer lines    
+    # dot => Dot product of two arrays. 
+    left_lane_line  = np.dot(left_length,  left_lines) /np.sum(left_length)  if len(left_length) >0 else None
+    right_lane_line = np.dot(right_length, right_lines)/np.sum(right_length) if len(right_length)>0 else None
+    return left_lane_line, right_lane_line # (slope, intercept)
+
+def draw_line_points(y1, y2, line):
+    """
+    Convert a line represented in slope and intercept into pixel line
+    """
+    if line is None:
+        return None    
+    slope, intercept = line   
+    # make sure everything is integer as cv2.line requires it
+    x1 = int(int(y1 - intercept)/slope)
+    x2 = int(int(y2 - intercept)/slope)
+    y1 = int(y1)
+    y2 = int(y2)
+    return ((x1, y1), (x2, y2))
+
+def lane_lines(image, lines):
+    left_lane, right_lane = average(lines)   
+    y1 = image.shape[0] # bottom of the image
+    y2 = y1*0.6         # slightly lower than the middle
+    left_line  = draw_line_points(y1, y2, left_lane)
+    right_line = draw_line_points(y1, y2, right_lane)   
+    return left_line, right_line
+
+def draw_lines(img, lines, color=[255, 0, 0], thickness=2):
+    """
+    NOTE: this is the function you might want to use as a starting point once you want to 
+    average/extrapolate the line segments you detect to map out the full
+    extent of the lane (going from the result shown in raw-lines-example.mp4
+    to that shown in P1_example.mp4).  
+    Think about things like separating line segments by their 
+    slope ((y2-y1)/(x2-x1)) to decide which segments are part of the left
+    line vs. the right line.  Then, you can average the position of each of 
+    the lines and extrapolate to the top and bottom of the lane. 
+    This function draws `lines` with `color` and `thickness`.    
+    Lines are drawn on the image inplace (mutates the image).
+    If you want to make the lines semi-transparent, think about combining
+    this function with the weighted_img() function below
+    """
+    for line in lines:
+        for x1,y1,x2,y2 in line:
+            cv2.line(img, (x1, y1), (x2, y2), color, thickness)
+
+def draw_lane_lines(image, lines, color=[255, 0, 0], thickness=10):
+    '''
+    make a separate image to draw lines and combine with the orignal later    
+    This function draws `lines` with `color` and `thickness`.    
+    Lines are drawn on the image inplace (mutates the image).
+    If you want to make the lines semi-transparent, think about combining
+    this function with the weighted_img() function below
+    '''    
+    line_image = np.zeros_like(image)
+    for line in lines:
+        if line is not None:
+            cv2.line(line_image, *line,  color, thickness)            
+    return line_image
+```
+
+![png](examples/result.png)
+
+## Test on Videos
+
+`solidWhiteRight.mp4`
+
+`solidYellowLeft.mp4`
+
+**Note: if you get an import error when you run the next cell, try changing your kernel (select the Kernel menu above --> Change Kernel). Still have problems? Try relaunching Jupyter Notebook from the terminal prompt. Also, consult the forums for more troubleshooting tips.**
+
+**If you get an error that looks like this:**
+```
+NeedDownloadError: Need ffmpeg exe. 
+You can download it by calling: 
+imageio.plugins.ffmpeg.download()
+```
+**Follow the instructions in the error message and check out [this forum post](https://discussions.udacity.com/t/project-error-of-test-on-videos/274082) for more troubleshooting tips across operating systems.**
+
 
